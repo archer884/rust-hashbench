@@ -1,93 +1,49 @@
 extern crate farmhash;
-extern crate time;
 extern crate fnv;
-use std::error::Error;
-use std::fs::File;
-use std::io::prelude::*;
-use std::path::Path;
-use time::precise_time_s;
-use std::hash::{Hash, SipHasher, Hasher};
+extern crate metrohash;
+extern crate time;
 
+use std::fs::File;
+use std::hash::{Hash, SipHasher, Hasher};
+use std::io::prelude::*;
+use time::precise_time_s;
+
+const DICT_PATH: &'static str = "/usr/share/dict/web2a";
 
 fn main() {
-    let path = Path::new("/usr/share/dict/web2a");
-    let display = path.display();
-
-    // Open the path in read-only mode, returns `io::Result<File>`
-    let mut file = match File::open(&path) {
-        // The `description` method of `io::Error` returns a string that
-        // describes the error
-        Err(why) => panic!("couldn't open {}: {}", display,
-                                                   Error::description(&why)),
-        Ok(file) => file,
-    };
-
+    let mut file = File::open(DICT_PATH)
+        .expect(&format!("couldn't open {}", DICT_PATH));
 
     let mut web2 = String::new();
-    match file.read_to_string(&mut web2) {
-        Err(why) => panic!("couldn't read {}: {}", display,
-                                                   Error::description(&why)),
-        Ok(_) => {},
+    file.read_to_string(&mut web2)
+        .expect(&format!("couldn't read {}", DICT_PATH));
+
+    let data: Vec<&str> = web2.split('\n').collect();
+
+    run_test("farmhash", &data, farmhash::FarmHasher::default);
+    run_test("fnv", &data, fnv::FnvHasher::default);
+    run_test("siphash", &data, SipHasher::new);
+    run_test("metrohash", &data, metrohash::MetroHash64::default);
+}
+
+fn run_test<F, T>(name: &str, data: &[&str], factory: F) 
+    where F: Fn() -> T,
+          T: Hasher,
+{
+    let mut hashes = Vec::new();
+    let mut time = 0.0f64;
+
+    for item in data {
+        let starttime = precise_time_s();
+        let mut hasher = factory();
+        item.hash(&mut hasher);
+        let res = hasher.finish();
+        time += precise_time_s() - starttime;
+        hashes.push(res);
     }
 
-    {
-        let split: Vec<&str> = web2.split("\n").collect();
-        let split_len = split.len();
-        let mut v: Vec<u64> = vec![];
-        let mut needed_time: f64 = 0.0;
-
-        for s in split {
-            let starttime = precise_time_s();
-            let res = farmhash::hash64(&s.as_bytes());
-            needed_time += precise_time_s() - starttime;
-            v.push(res);
-        }
-        v.sort();
-        v.dedup();
-        let dedup_percent = split_len - v.len();
-        println!("farmhash required {} s with {}/{} collisions", needed_time, dedup_percent, split_len);
-    }
-
-
-    {
-        let split: Vec<&str> = web2.split("\n").collect();
-        let split_len = split.len();
-        let mut v: Vec<u64> = vec![];
-        let mut needed_time: f64 = 0.0;
-
-        for s in split {
-            let starttime = precise_time_s();
-            let mut hasher = fnv::FnvHasher::default();
-            s.hash(&mut hasher);
-            let res = hasher.finish();
-            needed_time += precise_time_s() - starttime;
-            v.push(res);
-        }
-
-        v.sort();
-        v.dedup();
-        let dedup_percent = split_len - v.len();
-        println!("fnv required {} s with {}/{} collisions", needed_time, dedup_percent, split_len);
-    }
-
-    {
-        let split: Vec<&str> = web2.split("\n").collect();
-        let split_len = split.len();
-        let mut v: Vec<u64> = vec![];
-        let mut needed_time: f64 = 0.0;
-
-        for s in split {
-            let starttime = precise_time_s();
-            let mut hasher = SipHasher::default();
-            s.hash(&mut hasher);
-            let res = hasher.finish();
-            needed_time += precise_time_s() - starttime;
-            v.push(res);
-        }
-
-        v.sort();
-        v.dedup();
-        let dedup_percent = split_len - v.len();
-        println!("siphash required {} s with {}/{} collisions", needed_time, dedup_percent, split_len);
-    }
+    hashes.sort();
+    hashes.dedup();
+    let dedup_percent = data.len() - hashes.len();
+    println!("{} required {} s with {}/{} collisions", name, time, dedup_percent, data.len());
 }
